@@ -177,17 +177,48 @@ class DetectionEval:
         """
         start_time = time.time()
 
+        do_fine_grained_eval = int(os.getenv('FINE_GRAINED_EVAL', 0))
+        sample_npos = {}
+        if do_fine_grained_eval > 0:
+            print('Doing fine grained eval')
+            for gt_box in self.gt_boxes.all:
+                if gt_box.detection_name not in sample_npos:
+                    sample_npos[gt_box.detection_name] = {}
+                inner_d = sample_npos[gt_box.detection_name]
+                if gt_box.sample_token not in inner_d:
+                    inner_d[gt_box.sample_token] = 1
+                else:
+                    inner_d[gt_box.sample_token] += 1
+            path  = '/home/humble/shared/Anytime-Lidar/tools/'
+            fname = 'segment_precision_info.json'
+            fpath = path + fname
+            #print('Dumping fine grained result', class_name, dist_th)
+            file_exists = os.path.isfile(fpath)
+            if file_exists:
+                with open(fpath, 'r') as file:
+                    segment_precision_info = json.load(file)
+            else:
+                segment_precision_info = {'fields': ('scene', 'time_segment', 'dist_th', 'class', 
+                        'deadline_ms', 'seg_sample_stats'), 'tuples':[]}
+        else:
+            segment_precision_info = {}
+
         # -----------------------------------
         # Step 1: Accumulate metric data for all classes and distance thresholds.
         # -----------------------------------
         if self.verbose:
             print('Accumulating metric data...')
+ 
         metric_data_list = DetectionMetricDataList()
         for class_name in self.cfg.class_names:
             for dist_th in self.cfg.dist_ths:
-                md = accumulate(self.gt_boxes, self.pred_boxes, class_name, self.cfg.dist_fcn_callable, dist_th)
+                md = accumulate(self.gt_boxes, self.pred_boxes, class_name, self.cfg.dist_fcn_callable,
+                        dist_th, False, self.nusc, sample_npos, segment_precision_info)
                 metric_data_list.set(class_name, dist_th, md)
 
+        if do_fine_grained_eval > 0:
+            with open(fpath, 'w') as file:
+                json.dump(segment_precision_info, file, indent=2)
         # -----------------------------------
         # Step 2: Calculate metrics from the data.
         # -----------------------------------

@@ -154,7 +154,10 @@ mini_val = []
 do_calib = int(os.getenv('CALIBRATION', '0'))
 if do_calib:
     print('USING CALIBRATION DATASET')
-    train = ['scene-0061', 'scene-0655', 'scene-0757', 'scene-1077', 'scene-1094', 'scene-1100']
+    #train = ['scene-0061', 'scene-0655', 'scene-0757', 'scene-1077', 'scene-1094', 'scene-1100']
+
+    # for speed calib:
+    train = ['scene-0771', 'scene-0221', 'scene-1064', 'scene-0923', 'scene-1072', 'scene-0017']
 else:
     train = []
 test  = []
@@ -168,6 +171,11 @@ high_speed_scenes = \
 
 #all_speed_scenes = slow_speed_scenes + high_speed_scenes[::-1]
 all_speed_scenes = high_speed_scenes + slow_speed_scenes[::-1] # high to low
+all_speed_scenes_ = []
+for scene in all_speed_scenes:
+    if scene not in train:
+        all_speed_scenes_.append(scene)
+all_speed_scenes = all_speed_scenes_
 
 if do_calib:
     val = []
@@ -178,24 +186,16 @@ else:
         print('VAL dataset range:', drange)
         val = all_speed_scenes[drange[0]:drange[1]]
     else:
-        # Use %20 of the dataset for now
-        val = val[0:len(val):len(val)//30]
+        dataset_perc = 0.2 #1.0/30.0
+        # total val scenes: 150
+
+        #val_ = val
+        val_ = all_speed_scenes
+        val = val_[0:len(val_):len(val_)//int(len(val_)*dataset_perc)]
 
         # ENVIRONMENT TEST
         #val = high_speed_scenes[:15]
         #val = slow_speed_scenes[:15]
-
-#MOTIVATION:
-#if dataset_idx == 0:
-#    val = ['scene-0554', 'scene-0344']
-#    print('SLOW SPEED SCENES:',val)
-#elif dataset_idx == 1:
-#    val = ['scene-0098', 'scene-0035']
-#    print('HIGH SPEED SCENES:',val)
-
-
-# Comment next line for calib, uncomment for test
-#mini_train, mini_val = mini_val, mini_train
 
 def create_splits_logs(split: str, nusc: 'NuScenes') -> List[str]:
     """
