@@ -142,11 +142,15 @@ test = \
      'scene-1038', 'scene-1039', 'scene-1040', 'scene-1041', 'scene-1042', 'scene-1043']
 
 mini_train = \
-    ['scene-0061', 'scene-0553', 'scene-0655', 'scene-0757', 'scene-0796', 'scene-1077', 'scene-1094', 'scene-1100']
+    ['scene-0061', 'scene-0757', 'scene-1077', 'scene-1094', 'scene-1100']
+#    ['scene-0061', 'scene-0553', 'scene-0655', 'scene-0757', 'scene-0796', 'scene-1077', 'scene-1094', 'scene-1100']
 
 mini_val = \
-    ['scene-0103', 'scene-0916']
+    ['scene-0103', 'scene-0916', 'scene-0553', 'scene-0655', 'scene-0796']
+#    ['scene-0103', 'scene-0916']
 
+# Comment next line for calib, uncomment for test
+mini_train, mini_val = mini_val, mini_train
 
 def create_splits_logs(split: str, nusc: 'NuScenes') -> List[str]:
     """

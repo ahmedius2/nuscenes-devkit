@@ -4,7 +4,6 @@ fire
 jupyter
 matplotlib
 numpy
-opencv-python
 Pillow
 pyquaternion>=0.9.5
 scikit-learn
