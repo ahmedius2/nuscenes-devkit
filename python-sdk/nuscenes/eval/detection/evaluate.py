@@ -19,7 +19,7 @@ from nuscenes.eval.detection.constants import TP_METRICS
 from nuscenes.eval.detection.data_classes import DetectionConfig, DetectionMetrics, DetectionBox, \
     DetectionMetricDataList
 from nuscenes.eval.detection.render import summary_plot, class_pr_curve, class_tp_curve, dist_pr_curve, visualize_sample
-
+from typing import List
 
 class DetectionEval:
     """
@@ -47,7 +47,8 @@ class DetectionEval:
                  result_path: str,
                  eval_set: str,
                  output_dir: str = None,
-                 verbose: bool = True):
+                 verbose: bool = True,
+                 det_elapsed_musec: List[int] = None):
         """
         Initialize a DetectionEval object.
         :param nusc: A NuScenes object.
@@ -84,6 +85,8 @@ class DetectionEval:
         assert set(self.pred_boxes.sample_tokens) == set(self.gt_boxes.sample_tokens), \
             "Samples in split doesn't match samples in predictions."
 
+        # NOTE the center distances are not important for evaluation but rendering
+        # Therefore don't worry to much about it if it is not perfectly right
         # Add center distances.
         self.pred_boxes = add_center_dist(nusc, self.pred_boxes)
         self.gt_boxes = add_center_dist(nusc, self.gt_boxes)
@@ -96,6 +99,72 @@ class DetectionEval:
             print('Filtering ground truth annotations')
         self.gt_boxes = filter_eval_boxes(nusc, self.gt_boxes, self.cfg.class_range, verbose=verbose)
 
+        if det_elapsed_musec is not None:
+            from pyquaternion import Quaternion
+            # NOTE Do the gt box forecasting here based on detection timestamps
+            # det_elapsed_musec_per_sample: given as argument
+            # self.gt_boxes is an EvalBoxes object
+            # We will assume the detection has finished before t1 (next sample)
+            # if not, the detection results will be nullified, so there is no
+            # need to interpolate the ground truth
+            # t0 < det_t < t1
+            sample_tokens = self.gt_boxes.sample_tokens
+            assert len(sample_tokens) == len(det_elapsed_musec)
+            for sample_tkn, det_elapsed_t in zip(sample_tokens, det_elapsed_musec):
+                sample = nusc.get('sample', sample_tkn)
+                t0 = sample['timestamp']
+                det_t = t0 + det_elapsed_t # calculate timestamp
+                if sample['next'] != '': # This is not the last sample of the scene
+                    next_sample = nusc.get('sample', sample['next'])
+                    t1 = next_sample['timestamp']
+                    if det_t >= t1:
+                        # deadline missed, don't deal with it
+                        continue
+
+                    # Interpolate the ground truths of this sample based on det_t
+                    # Everything is in global coordinate frames, cool!
+                    next_gt_boxes = self.gt_boxes[sample['next']]
+                    next_gt_boxes_dict = {b.sample_anno_token: b for b in next_gt_boxes}
+                    for gt_box in self.gt_boxes[sample_tkn]:
+                        next_sample_anno_tkn = nusc.get('sample_annotation',
+                                gt_box.sample_anno_token)['next']
+                        if next_sample_anno_tkn in next_gt_boxes_dict:
+                        #if next_sample_anno_tkn != '':
+                            # Interpolate using next gt_box, find it first
+                            next_gt_box = next_gt_boxes_dict[next_sample_anno_tkn]
+
+                            rratio = (det_t - t0) / (t1 - t0)
+                            gt_box.translation = (1.0 - rratio) * \
+                                    np.array(gt_box.translation, dtype=float) + \
+                                    rratio * np.array(next_gt_box.translation, dtype=float)
+                            # Assume constant velocity
+                            #gt_box.velocity = (1.0 - rratio) * \
+                            #        np.array(gt_box.velocity, dtype=float) + \
+                            #        rratio * np.array(next_gt_box.velocity, dtype=float)
+                            gt_box.rotation = Quaternion.slerp(q0=Quaternion(gt_box.rotation),
+                                    q1=Quaternion(next_gt_box.rotation), amount=rratio).elements
+                            gt_box.translation = tuple(gt_box.translation.tolist())
+                            #gt_box.velocity= tuple(gt_box.velocity.tolist())
+                            gt_box.rotation = tuple(gt_box.rotation.tolist())
+                        else:
+                            # Interpolate only the translation using gt_box velocity
+                            # if the velocity is not non
+                            v = np.array(gt_box.velocity, dtype=float)
+                            if not np.any(np.isnan(v)):
+                                t_inc = v * (det_t - t0) / 1000000.0 # musec to sec
+                                x = gt_box.translation[0] + t_inc[0]
+                                y = gt_box.translation[1] + t_inc[1]
+                                gt_box.translation = (x, y, gt_box.translation[2])
+                else:
+                    # No next sample, just do velocity interpolation
+                    v = np.array(gt_box.velocity, dtype=float)
+                    if not np.any(np.isnan(v)):
+                        t_inc = v * (det_t - t0) / 1000000.0 # musec to sec
+                        x = gt_box.translation[0] + t_inc[0]
+                        y = gt_box.translation[1] + t_inc[1]
+                        gt_box.translation = (x, y, gt_box.translation[2])
+
+        # NOTE This seems to be not important for the evaluation as well
         self.sample_tokens = self.gt_boxes.sample_tokens
 
     def evaluate(self) -> Tuple[DetectionMetrics, DetectionMetricDataList]:

@@ -139,7 +139,8 @@ def load_gt(nusc: NuScenes, eval_split: str, box_cls, verbose: bool = False) -> 
                         num_pts=sample_annotation['num_lidar_pts'] + sample_annotation['num_radar_pts'],
                         detection_name=detection_name,
                         detection_score=-1.0,  # GT samples do not have a score.
-                        attribute_name=attribute_name
+                        attribute_name=attribute_name,
+                        sample_anno_token=sample_annotation_token
                     )
                 )
             elif box_cls == TrackingBox:

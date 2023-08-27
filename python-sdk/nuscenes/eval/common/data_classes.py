@@ -18,10 +18,12 @@ class EvalBox(abc.ABC):
                  rotation: Tuple[float, float, float, float] = (0, 0, 0, 0),
                  velocity: Tuple[float, float] = (0, 0),
                  ego_translation: Tuple[float, float, float] = (0, 0, 0),  # Translation to ego vehicle in meters.
-                 num_pts: int = -1):  # Nbr. LIDAR or RADAR inside the box. Only for gt boxes.
+                 num_pts: int = -1,  # Nbr. LIDAR or RADAR inside the box. Only for gt boxes.
+                 sample_anno_token: str = ""):
 
         # Assert data for shape and NaNs.
         assert type(sample_token) == str, 'Error: sample_token must be a string!'
+        assert type(sample_anno_token) == str, 'Error: sample_anno_token must be a string!'
 
         assert len(translation) == 3, 'Error: Translation must have 3 elements!'
         assert not np.any(np.isnan(translation)), 'Error: Translation may not be NaN!'
@@ -43,6 +45,7 @@ class EvalBox(abc.ABC):
 
         # Assign.
         self.sample_token = sample_token
+        self.sample_anno_token = sample_anno_token
         self.translation = translation
         self.size = size
         self.rotation = rotation
