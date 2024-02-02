@@ -149,8 +149,25 @@ mini_val = \
     ['scene-0103', 'scene-0916', 'scene-0553', 'scene-0655', 'scene-0796']
 #    ['scene-0103', 'scene-0916']
 
+train = train[:2]
+#val   = val[::8]
+test  = train[:2]
+
+# HIGH SPEED SCENES
+high_speed_scenes = [ 'scene-0245', 'scene-0791', 'scene-1049', 'scene-1050', 'scene-1057',
+        'scene-1074', 'scene-1075', 'scene-1077', 'scene-1078', 'scene-1079', 'scene-1102',
+        'scene-1106', 'scene-1107']
+
+# SLOW/ZERO SPEED SCENES
+slow_speed_scenes = [ 'scene-0041', 'scene-0046', 'scene-0097', 'scene-0100', 'scene-0101',
+        'scene-0190', 'scene-0227', 'scene-0242', 'scene-0243', 'scene-0244', 'scene-0256',
+        'scene-0260', 'scene-0563']
+
+#val = high_speed_scenes
+val = slow_speed_scenes
+
 # Comment next line for calib, uncomment for test
-mini_train, mini_val = mini_val, mini_train
+#mini_train, mini_val = mini_val, mini_train
 
 def create_splits_logs(split: str, nusc: 'NuScenes') -> List[str]:
     """
@@ -203,7 +220,7 @@ def create_splits_scenes(verbose: bool = False) -> Dict[str, List[str]]:
     """
     # Use hard-coded splits.
     all_scenes = train + val + test
-    assert len(all_scenes) == 1000 and len(set(all_scenes)) == 1000, 'Error: Splits incomplete!'
+    #assert len(all_scenes) == 1000 and len(set(all_scenes)) == 1000, 'Error: Splits incomplete!'
     scene_splits = {'train': train, 'val': val, 'test': test,
                     'mini_train': mini_train, 'mini_val': mini_val,
                     'train_detect': train_detect, 'train_track': train_track}
