@@ -100,6 +100,9 @@ class DetectionEval:
         self.gt_boxes = filter_eval_boxes(nusc, self.gt_boxes, self.cfg.class_range, verbose=verbose)
 
         if det_elapsed_musec is not None:
+            print('#############################################')
+            print('########## FORECASTED EVALUATION ############')
+            print('#############################################')
             from pyquaternion import Quaternion
             # NOTE Do the gt box forecasting here based on detection timestamps
             # det_elapsed_musec_per_sample: given as argument
