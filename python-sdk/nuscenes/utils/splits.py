@@ -164,7 +164,8 @@ slow_speed_scenes = \
 high_speed_scenes = \
 ['scene-0098', 'scene-0923', 'scene-0796', 'scene-0035', 'scene-0795', 'scene-0110', 'scene-1070', 'scene-1071', 'scene-0799', 'scene-0036', 'scene-0911', 'scene-0039', 'scene-0800', 'scene-0093', 'scene-0913', 'scene-1069', 'scene-0094', 'scene-0802', 'scene-0912', 'scene-0637', 'scene-0012', 'scene-0906', 'scene-1066', 'scene-1061', 'scene-0905', 'scene-0524', 'scene-0277', 'scene-0096', 'scene-1065', 'scene-0915', 'scene-1060', 'scene-0269', 'scene-0922', 'scene-0520', 'scene-0038', 'scene-0522', 'scene-1072', 'scene-0783', 'scene-0092', 'scene-0105', 'scene-0909', 'scene-0104', 'scene-0519', 'scene-0919', 'scene-0107', 'scene-0273', 'scene-0102', 'scene-0099', 'scene-0521', 'scene-0962', 'scene-0625', 'scene-0798', 'scene-0910', 'scene-0013', 'scene-0274', 'scene-0109', 'scene-0523', 'scene-0106', 'scene-0633', 'scene-0908', 'scene-0627', 'scene-0914', 'scene-0972', 'scene-0276', 'scene-0562', 'scene-0103', 'scene-0924', 'scene-0101', 'scene-0904', 'scene-0016', 'scene-0559', 'scene-0626', 'scene-1067', 'scene-0555', 'scene-0017']
 
-all_speed_scenes = slow_speed_scenes + high_speed_scenes[::-1]
+#all_speed_scenes = slow_speed_scenes + high_speed_scenes[::-1]
+all_speed_scenes = high_speed_scenes + slow_speed_scenes[::-1] # high to low
 
 if do_calib:
     val = []
