@@ -152,7 +152,11 @@ mini_val = []
 
 # train is for calibration
 do_calib = int(os.getenv('CALIBRATION', '0'))
-train = ['scene-0061', 'scene-0655', 'scene-0757', 'scene-1077', 'scene-1094', 'scene-1100'] if do_calib else []
+if do_calib:
+    print('GENERATING CALIBRATION DATASET')
+    train = ['scene-0061', 'scene-0655', 'scene-0757', 'scene-1077', 'scene-1094', 'scene-1100']
+else:
+    train = []
 test  = []
 
 slow_speed_scenes = \
@@ -162,10 +166,17 @@ high_speed_scenes = \
 
 all_speed_scenes = slow_speed_scenes + high_speed_scenes[::-1]
 
-drange = os.getenv('DATASET_RANGE', '0-150').split('-')
-drange = [int(r) for r in drange]
-print('Dataset range:', drange)
-val = all_speed_scenes[drange[0]:drange[1]] if not do_calib else []
+if do_calib:
+    val = []
+else:
+    if 'DATASET_RANGE' in os.environ:
+        drange = os.getenv('DATASET_RANGE').split('-')
+        drange = [int(r) for r in drange]
+        print('VAL dataset range:', drange)
+        val = all_speed_scenes[drange[0]:drange[1]]
+    else:
+        # Use %20 of the dataset for now
+        val = val[0:len(val):len(val)//30]
 
 #MOTIVATION:
 #if dataset_idx == 0:
