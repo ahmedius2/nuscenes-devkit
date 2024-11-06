@@ -155,6 +155,13 @@ class PointCloud(ABC):
         not_close = np.logical_not(np.logical_and(x_filt, y_filt))
         self.points = self.points[:, not_close]
 
+    def filter_xy(self, x_lims: Tuple[float,float], y_lims: Tuple[float,float]) -> None:
+        mask = (self.points[0, :] > x_lims[0])
+        mask = np.logical_and(mask, (self.points[0, :] < x_lims[1]))
+        mask = np.logical_and(mask, (self.points[1, :] > y_lims[0]))
+        mask = np.logical_and(mask, (self.points[1, :] < y_lims[1]))
+        self.points = self.points[:, mask]
+
     def translate(self, x: np.ndarray) -> None:
         """
         Applies a translation to the point cloud.

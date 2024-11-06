@@ -9,6 +9,7 @@ import time
 from typing import Tuple, Dict, Any
 
 import numpy as np
+import matplotlib.pyplot as plt
 
 from nuscenes import NuScenes
 from nuscenes.eval.common.config import config_factory
@@ -19,7 +20,34 @@ from nuscenes.eval.detection.constants import TP_METRICS
 from nuscenes.eval.detection.data_classes import DetectionConfig, DetectionMetrics, DetectionBox, \
     DetectionMetricDataList
 from nuscenes.eval.detection.render import summary_plot, class_pr_curve, class_tp_curve, dist_pr_curve, visualize_sample
-from typing import List
+from nuscenes.utils.data_classes import LidarPointCloud, RadarPointCloud, Box
+from typing import List, Dict
+from pyquaternion import Quaternion
+
+def get_smooth_egovel(nusc, sample_tkn, target_time_diff_ms=250, global_coords=False):
+    sample = nusc.get('sample', sample_tkn)
+    sd_tkn = sample['data']['LIDAR_TOP']
+    sample_data = nusc.get('sample_data', sd_tkn)
+    ts = sample_data['timestamp'] # microseconds
+
+    past_sample_data = sample_data
+    past_ts = ts
+    while past_sample_data['prev'] != '' and (ts-past_ts) < target_time_diff_ms*1000:
+        past_sample_data = nusc.get('sample_data', past_sample_data['prev'])
+        past_ts = past_sample_data['timestamp']
+
+    ep = nusc.get('ego_pose', sample_data['ego_pose_token'])
+    past_ep = nusc.get('ego_pose', past_sample_data['ego_pose_token'])
+    trnsl = np.array(ep['translation'])
+    past_trnsl = np.array(past_ep['translation'])
+    egovel = (trnsl - past_trnsl) / ((ts - past_ts) * 1e-6)
+
+    if not global_coords:
+        rotation = Quaternion(ep['rotation'])
+        # Convert the global velocity to ego frame
+        egovel = rotation.inverse.rotate(egovel)
+
+    return ep, egovel
 
 class DetectionEval:
     """
@@ -48,7 +76,7 @@ class DetectionEval:
                  eval_set: str,
                  output_dir: str = None,
                  verbose: bool = True,
-                 det_elapsed_musec: List[int] = None):
+                 det_elapsed_musec: Dict[str,int] = None):
         """
         Initialize a DetectionEval object.
         :param nusc: A NuScenes object.
@@ -103,72 +131,181 @@ class DetectionEval:
             print('#############################################')
             print('########## FORECASTED EVALUATION ############')
             print('#############################################')
-            from pyquaternion import Quaternion
             # NOTE Do the gt box forecasting here based on detection timestamps
             # det_elapsed_musec_per_sample: given as argument
             # self.gt_boxes is an EvalBoxes object
-            # We will assume the detection has finished before t1 (next sample)
-            # if not, the detection results will be nullified, so there is no
-            # need to interpolate the ground truth
-            # t0 < det_t < t1
             sample_tokens = self.gt_boxes.sample_tokens
-            assert len(sample_tokens) == len(det_elapsed_musec)
-            for sample_tkn, det_elapsed_t in zip(sample_tokens, det_elapsed_musec):
-                sample = nusc.get('sample', sample_tkn)
-                t0 = sample['timestamp']
-                det_t = t0 + det_elapsed_t # calculate timestamp
-                if sample['next'] != '': # This is not the last sample of the scene
-                    next_sample = nusc.get('sample', sample['next'])
-                    t1 = next_sample['timestamp']
-                    if det_t >= t1:
-                        # deadline missed, don't deal with it
-                        continue
+            for i, sample_tkn in enumerate(sample_tokens):
+                tdiff_musec = det_elapsed_musec[sample_tkn]
+                drawnow = False #((i % 100) == 0)
+                if drawnow:
+                    print('Time difference (ms):', tdiff_musec * 1e-3)
+                    #_, axes = plt.subplots(1, 3, figsize=(12, 18))
+                    ax = self.visualize_sample(sample_tkn) #, axes[0])
+                    ep, egovel = get_smooth_egovel(self.nusc, sample_tkn, global_coords=True)
+                    ax.arrow(ep['translation'][0], ep['translation'][1], egovel[0], egovel[1],
+                                             head_width=0.9, head_length=0.7, fc='red', ec='red')
 
-                    # Interpolate the ground truths of this sample based on det_t
-                    # Everything is in global coordinate frames, cool!
-                    next_gt_boxes = self.gt_boxes[sample['next']]
-                    next_gt_boxes_dict = {b.sample_anno_token: b for b in next_gt_boxes}
-                    for gt_box in self.gt_boxes[sample_tkn]:
-                        next_sample_anno_tkn = nusc.get('sample_annotation',
-                                gt_box.sample_anno_token)['next']
-                        if next_sample_anno_tkn in next_gt_boxes_dict:
-                        #if next_sample_anno_tkn != '':
-                            # Interpolate using next gt_box, find it first
-                            next_gt_box = next_gt_boxes_dict[next_sample_anno_tkn]
-
-                            rratio = (det_t - t0) / (t1 - t0)
-                            gt_box.translation = (1.0 - rratio) * \
-                                    np.array(gt_box.translation, dtype=float) + \
-                                    rratio * np.array(next_gt_box.translation, dtype=float)
-                            # Assume constant velocity
-                            #gt_box.velocity = (1.0 - rratio) * \
-                            #        np.array(gt_box.velocity, dtype=float) + \
-                            #        rratio * np.array(next_gt_box.velocity, dtype=float)
-                            gt_box.rotation = Quaternion.slerp(q0=Quaternion(gt_box.rotation),
-                                    q1=Quaternion(next_gt_box.rotation), amount=rratio).elements
-                            gt_box.translation = tuple(gt_box.translation.tolist())
-                            #gt_box.velocity= tuple(gt_box.velocity.tolist())
-                            gt_box.rotation = tuple(gt_box.rotation.tolist())
-                        else:
-                            # Interpolate only the translation using gt_box velocity
-                            # if the velocity is not non
-                            v = np.array(gt_box.velocity, dtype=float)
-                            if not np.any(np.isnan(v)):
-                                t_inc = v * (det_t - t0) / 1000000.0 # musec to sec
-                                x = gt_box.translation[0] + t_inc[0]
-                                y = gt_box.translation[1] + t_inc[1]
-                                gt_box.translation = (x, y, gt_box.translation[2])
-                else:
-                    # No next sample, just do velocity interpolation
-                    v = np.array(gt_box.velocity, dtype=float)
-                    if not np.any(np.isnan(v)):
-                        t_inc = v * (det_t - t0) / 1000000.0 # musec to sec
-                        x = gt_box.translation[0] + t_inc[0]
-                        y = gt_box.translation[1] + t_inc[1]
-                        gt_box.translation = (x, y, gt_box.translation[2])
-
+                self.move_pred_boxes(sample_tkn, tdiff_musec)
+                if drawnow:
+                    self.visualize_sample(sample_tkn) #, axes[1])
+                self.move_gt_boxes(sample_tkn, tdiff_musec)
+                if drawnow:
+                    self.visualize_sample(sample_tkn) #, axes[2])
+                    plt.show()
         # NOTE This seems to be not important for the evaluation as well
         self.sample_tokens = self.gt_boxes.sample_tokens
+
+    def visualize_sample(self, sample_tkn, ax=None):
+        nusc = self.nusc
+        if ax is None:
+            _, ax = plt.subplots(1, 1, figsize=(9, 9))
+        sample = nusc.get('sample', sample_tkn)
+        sensor = 'LIDAR_TOP'
+        sample_data = nusc.get('sample_data', sample['data'][sensor])
+        pcl_path = os.path.join(self.nusc.dataroot, sample_data['filename'])
+        pc = LidarPointCloud.from_file(pcl_path)
+        pc.filter_xy((-57.6, 57.6), (-57.6, 57.6))
+
+        # point cloud is in lidar coordinate frame, transform it to be in global coordinate frame
+        # scatter point cloud on the field in BEV
+
+        ref_cs_record = self.nusc.get('calibrated_sensor', sample_data['calibrated_sensor_token'])
+        ego_pose = self.nusc.get('ego_pose', sample_data['ego_pose_token'])
+        rotation = Quaternion(ref_cs_record['rotation'])
+        translation = np.array(ref_cs_record['translation'])
+        pc.rotate(rotation.rotation_matrix)
+        pc.translate(translation)
+        rotation = Quaternion(ego_pose['rotation'])
+        translation = np.array(ego_pose['translation'])
+        pc.rotate(rotation.rotation_matrix)
+        pc.translate(translation)
+        ax.scatter(pc.points[0, :], pc.points[1, :], s=0.1, c='blue', alpha=0.3, label='Point Cloud')
+
+        # Draw ground truth boxes in red
+        c = ('r', 'r', 'r')
+        for gt_box in self.gt_boxes[sample_tkn]:
+            Box(gt_box.translation, gt_box.size, Quaternion(gt_box.rotation)).render(ax,
+                    colors=c)
+
+        # Draw predicted boxes in green
+        c = ('g', 'g', 'g')
+        for pred_box in self.pred_boxes[sample_tkn]:
+            Box(pred_box.translation, pred_box.size, Quaternion(pred_box.rotation)).render(ax,
+                    colors=c)
+
+        # Set labels and show legend
+        ax.set_xlabel("X")
+        ax.set_ylabel("Y")
+        #ax.legend(loc='upper right')
+        ax.set_aspect('equal', 'box')
+        ax.set_title(f"Sample Token: {sample_tkn}")
+
+        return ax
+
+
+    def move_pred_boxes(self, sample_tkn, tdiff_musec):
+        nusc = self.nusc
+        sample = nusc.get('sample', sample_tkn)
+        sd_tkn = sample['data']['LIDAR_TOP']
+        sample_data = nusc.get('sample_data', sd_tkn)
+        ts1 = sample_data['timestamp']
+
+        # find the next sample data we can interpolate
+        sample_data_next = sample_data
+        ts2 = ts1
+        while sample_data_next['next'] != '' and ts2 < ts1 + tdiff_musec:
+            sample_data_next = nusc.get('sample_data', sample_data_next['next'])
+            ts2 = sample_data_next['timestamp']
+
+        tdiff_sec = tdiff_musec * 1e-6
+        extrapolate = False
+        if ts1 == ts2:
+            # coulnt move at all
+            sample_data = nusc.get('sample_data', sample_data['prev'])
+            ts1 = sample_data['timestamp']
+            extrapolate = True
+        elif ts2 < ts1 + tdiff_musec:
+            # couldnt go further as needed, have to extrapolate
+            extrapolate = True
+
+        ep1 = nusc.get('ego_pose', sample_data['ego_pose_token'])
+        ep2 = nusc.get('ego_pose', sample_data_next['ego_pose_token'])
+
+        if extrapolate:
+            poses_tdiff_sec = ((ts2 - ts1) * 1e-6)
+            linear_vel = (np.array(ep2['translation']) - \
+                    np.array(ep1['translation'])) / poses_tdiff_sec
+            translation_diff = linear_vel * tdiff_sec
+
+            rot1 = Quaternion(ep1['rotation'])
+            rot2 = Quaternion(ep2['rotation'])
+            angular_velocity = (rot2 * rot1.inverse) ** (1 / poses_tdiff_sec)
+            rotation_diff = angular_velocity ** tdiff_sec  #* rot_100ms
+        else:
+            # we can interpolate between poses
+            rratio = tdiff_musec / (ts2 - ts1)
+            translation_diff = (np.array(ep2['translation']) - \
+                    np.array(ep1['translation'])) * rratio
+            rotation_diff = Quaternion.slerp(q0=Quaternion(ep1['rotation']),
+                    q1=Quaternion(ep2['rotation']), amount=rratio)
+
+        for box in self.pred_boxes[sample_tkn]:
+            box.translation = tuple(np.array(box.translation) + translation_diff)
+            #box.rotation = (rotation_diff * Quaternion(box.rotation)).elements
+
+        return
+
+    def move_gt_boxes(self, sample_tkn, tdiff_musec):
+        nusc = self.nusc
+        ts1 = nusc.get('sample', sample_tkn)['timestamp']
+        for gt_box in self.gt_boxes[sample_tkn]:
+            sample_anno = nusc.get('sample_annotation', gt_box.sample_anno_token)
+            sample_anno_next = sample_anno
+            ts2 = ts1
+            while sample_anno_next['next'] != '' and ts2 < ts1 + tdiff_musec:
+                sample_anno_next = nusc.get('sample_annotation', sample_anno_next['next'])
+                ts2 = nusc.get('sample', sample_anno_next['sample_token'])['timestamp']
+
+            tdiff_sec = tdiff_musec * 1e-6
+            extrapolate, simple_vel_based_pred = False, False
+            if ts1 == ts2:
+                # coulnt move at all, just do velocity based prediction
+                simple_vel_based_pred = True
+            elif ts2 < ts1 + tdiff_musec:
+                # couldnt go further as needed, have to extrapolate
+                extrapolate = True
+
+            if simple_vel_based_pred:
+                if not np.isnan(gt_box.velocity).any():
+                    newx = gt_box.translation[0] + gt_box.velocity[0] * tdiff_sec
+                    newy = gt_box.translation[1] + gt_box.velocity[1] * tdiff_sec
+                    gt_box.translation = (newx, newy, gt_box.translation[2])
+            else:
+                sa1, sa2 = sample_anno, sample_anno_next
+                if extrapolate:
+                    poses_tdiff_sec = ((ts2 - ts1) * 1e-6)
+                    linear_vel = (np.array(sa2['translation']) - \
+                            np.array(sa1['translation'])) / poses_tdiff_sec
+                    translation_diff = linear_vel * tdiff_sec
+
+                    rot1 = Quaternion(sa1['rotation'])
+                    rot2 = Quaternion(sa2['rotation'])
+                    angular_velocity = (rot2 * rot1.inverse) ** (1 / poses_tdiff_sec)
+                    rotation_diff = angular_velocity ** tdiff_sec  #* rot_100ms
+                else:
+                    # we can interpolate between poses
+                    rratio = tdiff_musec / (ts2 - ts1)
+                    translation_diff = (np.array(sa2['translation']) - \
+                            np.array(sa1['translation'])) * rratio
+                    rotation_diff = Quaternion.slerp(q0=Quaternion(sa1['rotation']),
+                            q1=Quaternion(sa2['rotation']), amount=rratio)
+
+                gt_box.translation = tuple(np.array(gt_box.translation) + translation_diff)
+                #gt_box.rotation = (rotation_diff * Quaternion(gt_box.rotation)).elements
+
+        return
+
 
     def evaluate(self) -> Tuple[DetectionMetrics, DetectionMetricDataList]:
         """
@@ -189,17 +326,14 @@ class DetectionEval:
                     inner_d[gt_box.sample_token] = 1
                 else:
                     inner_d[gt_box.sample_token] += 1
-            path  = '/home/humble/shared/Anytime-Lidar/tools/'
-            fname = 'segment_precision_info.json'
-            fpath = path + fname
-            #print('Dumping fine grained result', class_name, dist_th)
+            fpath = 'segment_precision_info.json'
             file_exists = os.path.isfile(fpath)
             if file_exists:
                 with open(fpath, 'r') as file:
                     segment_precision_info = json.load(file)
             else:
                 segment_precision_info = {'fields': ('scene', 'time_segment', 'dist_th', 'class', 
-                        'deadline_ms', 'seg_sample_stats'), 'tuples':[]}
+                        'resolution', 'seg_sample_stats'), 'tuples':[]}
         else:
             segment_precision_info = {}
 

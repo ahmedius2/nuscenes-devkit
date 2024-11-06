@@ -177,7 +177,8 @@ def accumulate(gt_boxes: EvalBoxes,
             sample_pred_data[pred_box.sample_token].append(pbd)
 
     if do_fine_grained_eval > 0:
-        deadline_ms = os.getenv('CALIB_DEADLINE_MILLISEC', 0)
+        res_idx = int(os.getenv('RESOLUTION_IDX', 0))
+        data_period_ms = int(os.getenv('DATASET_PERIOD', 100))
         while sample_pred_data:
             #Get the scene
             sample_tkn = next(iter(sample_pred_data.keys()))
@@ -186,14 +187,14 @@ def accumulate(gt_boxes: EvalBoxes,
             sample_tkn = scene['first_sample_token']
             # For every 1 second, which is 1000ms / 50ms = 20 samples, calc precision
             # Assumes the time between samples is 50 ms
-            step_ms, PERIOD = 1000, 50
+            step_ms = 2000
             sec = 0
             while sample_tkn != "":
                 samples_processed = 0
                 seg_sample_stats = []
-                while samples_processed < step_ms//PERIOD and sample_tkn != "":
+                while samples_processed < step_ms//data_period_ms and sample_tkn != "":
                     sample = nusc.get('sample', sample_tkn)
-                    ep, ev = get_egopose_and_egovel(nusc, sample, norm=False)
+                    #ep, ev = get_egopose_and_egovel(nusc, sample, norm=False)
                     if sample_tkn in sample_pred_data:
                         pred_data = sample_pred_data[sample_tkn]
                         del sample_pred_data[sample_tkn]
@@ -201,8 +202,8 @@ def accumulate(gt_boxes: EvalBoxes,
                         pred_data = list()
                     seg_sample_stats.append({'sample_token': sample_tkn,
                             'num_gt': sample_npos_cls.get(sample_tkn, 0),
-                            'egopose_translation_xy': ep['translation'][:2],
-                            'egovel_xy': ev[:2].tolist(),
+                            #'egopose_translation_xy': ep['translation'][:2],
+                            #'egovel_xy': ev[:2].tolist(),
                             'pred_data': pred_data})
 
                     sample = nusc.get('sample', sample_tkn)
@@ -214,7 +215,7 @@ def accumulate(gt_boxes: EvalBoxes,
                     (sec, sec+step_ms),
                     dist_th,
                     class_name,
-                    deadline_ms,
+                    res_idx,
                     seg_sample_stats))
                 sec += step_ms
 
