@@ -53,7 +53,7 @@ def accumulate(gt_boxes: EvalBoxes,
                verbose: bool = False,
                nusc: NuScenes = None,
                sample_npos : Dict[str,Dict[str,int]] = dict(),
-               segment_precision_info = dict()) -> DetectionMetricData:
+               segment_eval_data = dict()) -> DetectionMetricData:
     """
     Average Precision over predefined different recall thresholds for a single distance threshold.
     The recall/conf thresholds and other raw metrics will be used in secondary metrics.
@@ -91,17 +91,17 @@ def accumulate(gt_boxes: EvalBoxes,
     sortind = [i for (v, i) in sorted((v, i) for (i, v) in enumerate(pred_confs))][::-1]
 
     # Do the actual matching.
-    tp = []  # Accumulator of true positives.
-    fp = []  # Accumulator of false positives.
-    conf = []  # Accumulator of confidences.
+    numdets = len(sortind)
+    tp = np.zeros(numdets, dtype=bool)  # Accumulator of true positives.
+    conf = np.zeros(numdets, dtype=float)  # Accumulator of confidences.
 
     # match_data holds the extra metrics we calculate for each match.
-    match_data = {'trans_err': [],
-                  'vel_err': [],
-                  'scale_err': [],
-                  'orient_err': [],
-                  'attr_err': [],
-                  'conf': []}
+    trans_err = np.empty(numdets, dtype=float)
+    vel_err = np.empty(numdets, dtype=float)
+    scale_err = np.empty(numdets, dtype=float)
+    orient_err = np.empty(numdets, dtype=float)
+    attr_err = np.empty(numdets, dtype=float)
+    conf_matched = np.empty(numdets, dtype=float)
 
     # ---------------------------------------------
     # Match and accumulate match data.
@@ -115,8 +115,12 @@ def accumulate(gt_boxes: EvalBoxes,
         sample_pred_data = {}
         sample_npos_cls = sample_npos[class_name]
 
+        cls_idx = segment_eval_data['class_names'].index(class_name)
+        scene_tokens = segment_eval_data['scene_tokens']
+
     taken = set()  # Initially no gt bounding box is matched.
-    for ind in sortind:
+    num_matched = 0
+    for i, ind in enumerate(sortind):
         pred_box = pred_boxes_list[ind]
         min_dist = np.inf
         match_gt_idx = None
@@ -136,62 +140,53 @@ def accumulate(gt_boxes: EvalBoxes,
         # If the closest match is close enough according to threshold we have a match!
         is_match = min_dist < dist_th
 
+        tp[i] = is_match
+        conf[i] = pred_box.detection_score
         if is_match:
             taken.add((pred_box.sample_token, match_gt_idx))
 
             #  Update tp, fp and confs.
-            tp.append(1)
-            fp.append(0)
-            conf.append(pred_box.detection_score)
 
             # Since it is a match, update match data also.
             gt_box_match = gt_boxes[pred_box.sample_token][match_gt_idx]
 
-            match_data['trans_err'].append(center_distance(gt_box_match, pred_box))
-            match_data['vel_err'].append(velocity_l2(gt_box_match, pred_box))
-            match_data['scale_err'].append(1 - scale_iou(gt_box_match, pred_box))
+            j = num_matched
+            trans_err[j] = center_distance(gt_box_match, pred_box)
+            vel_err[j] = velocity_l2(gt_box_match, pred_box)
+            scale_err[j] = (1 - scale_iou(gt_box_match, pred_box))
 
             # Barrier orientation is only determined up to 180 degree. (For cones orientation is discarded later)
             period = np.pi if class_name == 'barrier' else 2 * np.pi
-            match_data['orient_err'].append(yaw_diff(gt_box_match, pred_box, period=period))
+            orient_err[j] = yaw_diff(gt_box_match, pred_box, period=period)
+            attr_err[j] = (1 - attr_acc(gt_box_match, pred_box))
+            conf_matched[j] = conf[i]
+            num_matched += 1
 
-            match_data['attr_err'].append(1 - attr_acc(gt_box_match, pred_box))
-            match_data['conf'].append(pred_box.detection_score)
-        else:
-            # No match. Mark this as a false positive.
-            tp.append(0)
-            fp.append(1)
-            conf.append(pred_box.detection_score)
         if do_fine_grained_eval > 0:
-            # serialize the whole detection
-            ############
-            #pbd = pred_box.serialize()
-            #del pbd['sample_token'] # no need
-            #del pbd['detection_name'] # no need
-            #del pbd['num_pts'] # not available
-            #pbd['is_true_pos'] = tp[-1]
-            ############
-
             # serialize tp and score only
-            pbd = [tp[-1], pred_box.detection_score]
-            sample_pred_data[pred_box.sample_token].append(pbd)
+            sample_pred_data[pred_box.sample_token].append(pred_box.detection_score \
+                    if tp[i].item() else -pred_box.detection_score)
 
     if do_fine_grained_eval > 0:
-        res_idx = int(os.getenv('RESOLUTION_IDX', 0))
         data_period_ms = int(os.getenv('DATASET_PERIOD', 100))
+        tuples = segment_eval_data['tuples'][class_name][str(dist_th)]
         while sample_pred_data:
             #Get the scene
             sample_tkn = next(iter(sample_pred_data.keys()))
             scene_tkn = nusc.get('sample', sample_tkn)['scene_token']
+            scene_idx = scene_tokens[scene_tkn]
             scene = nusc.get('scene', scene_tkn)
             sample_tkn = scene['first_sample_token']
             # For every 1 second, which is 1000ms / 50ms = 20 samples, calc precision
             # Assumes the time between samples is 50 ms
-            step_ms = 2000
-            sec = 0
+            step_ms = segment_eval_data['segment_time_length_ms']
+            msec = 0
             while sample_tkn != "":
                 samples_processed = 0
-                seg_sample_stats = []
+                seg_sample_tokens = []
+                seg_num_gt = []
+                seg_pred_data = []
+
                 while samples_processed < step_ms//data_period_ms and sample_tkn != "":
                     sample = nusc.get('sample', sample_tkn)
                     #ep, ev = get_egopose_and_egovel(nusc, sample, norm=False)
@@ -200,27 +195,24 @@ def accumulate(gt_boxes: EvalBoxes,
                         del sample_pred_data[sample_tkn]
                     else:
                         pred_data = list()
-                    seg_sample_stats.append({'sample_token': sample_tkn,
-                            'num_gt': sample_npos_cls.get(sample_tkn, 0),
-                            #'egopose_translation_xy': ep['translation'][:2],
-                            #'egovel_xy': ev[:2].tolist(),
-                            'pred_data': pred_data})
+                    seg_sample_tokens.append(sample_tkn)
+                    seg_num_gt.append(sample_npos_cls.get(sample_tkn, 0))
+                    seg_pred_data.append(pred_data)
 
                     sample = nusc.get('sample', sample_tkn)
                     sample_tkn = sample['next']
                     samples_processed += 1
 
-                segment_precision_info['tuples'].append((
-                    scene["name"],
-                    (sec, sec+step_ms),
-                    dist_th,
-                    class_name,
-                    res_idx,
-                    seg_sample_stats))
-                sec += step_ms
+                tuples.append((
+                    scene_idx,
+                    msec,
+                    seg_sample_tokens,
+                    seg_num_gt,
+                    seg_pred_data))
+                msec += step_ms
 
     # Check if we have any matches. If not, just return a "no predictions" array.
-    if len(match_data['trans_err']) == 0:
+    if num_matched == 0:
         return DetectionMetricData.no_predictions()
 
     # ---------------------------------------------
@@ -228,9 +220,10 @@ def accumulate(gt_boxes: EvalBoxes,
     # ---------------------------------------------
 
     # Accumulate.
+    fp = np.logical_not(tp)
     tp = np.cumsum(tp).astype(float)
     fp = np.cumsum(fp).astype(float)
-    conf = np.array(conf)
+    #conf = np.array(conf)
 
     # Calculate precision and recall.
     prec = tp / (fp + tp)
@@ -245,13 +238,21 @@ def accumulate(gt_boxes: EvalBoxes,
     # Re-sample the match-data to match, prec, recall and conf.
     # ---------------------------------------------
 
-    for key in match_data.keys():
-        if key == "conf":
-            continue  # Confidence is used as reference to align with fp and tp. So skip in this step.
+    match_data = {'trans_err': trans_err,
+            'vel_err': vel_err,
+            'scale_err': scale_err,
+            'orient_err': orient_err,
+            'attr_err': attr_err,
+            'conf': conf_matched}
 
-        else:
+    for k,v in match_data.items():
+        match_data[k] = v[:num_matched]
+
+    for key in match_data.keys():
+        # Confidence is used as reference to align with fp and tp. So skip in this step.
+        if key != "conf":
             # For each match_data, we first calculate the accumulated mean.
-            tmp = cummean(np.array(match_data[key]))
+            tmp = cummean(match_data[key])
 
             # Then interpolate based on the confidences. (Note reversing since np.interp needs increasing arrays)
             match_data[key] = np.interp(conf[::-1], match_data['conf'][::-1], tmp[::-1])[::-1]

@@ -18,6 +18,21 @@ from nuscenes.utils.data_classes import Box
 from nuscenes.utils.geometry_utils import points_in_box
 from nuscenes.utils.splits import create_splits_scenes
 
+def deserialize_prediction(data_dict, max_boxes_per_sample: int, box_cls, verbose: bool = False) \
+        -> Tuple[EvalBoxes, Dict]:
+    # Deserialize results and get meta data.
+    all_results = EvalBoxes.deserialize(data_dict['results'], box_cls)
+    meta = data_dict['meta']
+    if verbose:
+        print(f"Loaded results. Found detections for {len(all_results.sample_tokens)} samples.")
+
+    # Check that each sample has no more than x predicted boxes.
+    for sample_token in all_results.sample_tokens:
+        assert len(all_results.boxes[sample_token]) <= max_boxes_per_sample, \
+            "Error: Only <= %d boxes per sample allowed!" % max_boxes_per_sample
+
+    return all_results, meta
+
 
 def load_prediction(result_path: str, max_boxes_per_sample: int, box_cls, verbose: bool = False) \
         -> Tuple[EvalBoxes, Dict]:
@@ -36,19 +51,7 @@ def load_prediction(result_path: str, max_boxes_per_sample: int, box_cls, verbos
     assert 'results' in data, 'Error: No field `results` in result file. Please note that the result format changed.' \
                               'See https://www.nuscenes.org/object-detection for more information.'
 
-    # Deserialize results and get meta data.
-    all_results = EvalBoxes.deserialize(data['results'], box_cls)
-    meta = data['meta']
-    if verbose:
-        print("Loaded results from {}. Found detections for {} samples."
-              .format(result_path, len(all_results.sample_tokens)))
-
-    # Check that each sample has no more than x predicted boxes.
-    for sample_token in all_results.sample_tokens:
-        assert len(all_results.boxes[sample_token]) <= max_boxes_per_sample, \
-            "Error: Only <= %d boxes per sample allowed!" % max_boxes_per_sample
-
-    return all_results, meta
+    return deserialize_prediction(data, max_boxes_per_sample, box_cls, verbose)
 
 
 def load_gt(nusc: NuScenes, eval_split: str, box_cls, verbose: bool = False) -> EvalBoxes:

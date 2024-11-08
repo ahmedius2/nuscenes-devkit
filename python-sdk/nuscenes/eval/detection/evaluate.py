@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 from nuscenes import NuScenes
 from nuscenes.eval.common.config import config_factory
 from nuscenes.eval.common.data_classes import EvalBoxes
-from nuscenes.eval.common.loaders import load_prediction, load_gt, add_center_dist, filter_eval_boxes
+from nuscenes.eval.common.loaders import load_prediction, deserialize_prediction, load_gt, add_center_dist, filter_eval_boxes
 from nuscenes.eval.detection.algo import accumulate, calc_ap, calc_tp
 from nuscenes.eval.detection.constants import TP_METRICS
 from nuscenes.eval.detection.data_classes import DetectionConfig, DetectionMetrics, DetectionBox, \
@@ -76,7 +76,8 @@ class DetectionEval:
                  eval_set: str,
                  output_dir: str = None,
                  verbose: bool = True,
-                 det_elapsed_musec: Dict[str,int] = None):
+                 det_elapsed_musec: Dict[str,int] = None,
+                 data_dict = None):
         """
         Initialize a DetectionEval object.
         :param nusc: A NuScenes object.
@@ -94,7 +95,7 @@ class DetectionEval:
         self.cfg = config
 
         # Check result file exists.
-        assert os.path.exists(result_path), 'Error: The result file does not exist!'
+        assert os.path.exists(result_path) or (data_dict is not None), 'Error: The result file does not exist!'
 
         # Make dirs.
         self.plot_dir = os.path.join(self.output_dir, 'plots')
@@ -106,7 +107,11 @@ class DetectionEval:
         # Load data.
         if verbose:
             print('Initializing nuScenes detection evaluation')
-        self.pred_boxes, self.meta = load_prediction(self.result_path, self.cfg.max_boxes_per_sample, DetectionBox,
+        if data_dict is not None:
+            self.pred_boxes, self.meta = deserialize_prediction(data_dict, self.cfg.max_boxes_per_sample, DetectionBox,
+                                                     verbose=verbose)
+        else:
+            self.pred_boxes, self.meta = load_prediction(self.result_path, self.cfg.max_boxes_per_sample, DetectionBox,
                                                      verbose=verbose)
         self.gt_boxes = load_gt(self.nusc, self.eval_set, DetectionBox, verbose=verbose)
 
@@ -316,26 +321,42 @@ class DetectionEval:
 
         do_fine_grained_eval = int(os.getenv('FINE_GRAINED_EVAL', 0))
         sample_npos = {}
+        scene_tokens = set()
+        segment_eval_data = {}
         if do_fine_grained_eval > 0:
             print('Doing fine grained eval')
             for gt_box in self.gt_boxes.all:
                 if gt_box.detection_name not in sample_npos:
                     sample_npos[gt_box.detection_name] = {}
                 inner_d = sample_npos[gt_box.detection_name]
-                if gt_box.sample_token not in inner_d:
-                    inner_d[gt_box.sample_token] = 1
+                stkn = gt_box.sample_token
+                if stkn not in inner_d:
+                    inner_d[stkn] = 1
                 else:
-                    inner_d[gt_box.sample_token] += 1
-            fpath = 'segment_precision_info.json'
+                    inner_d[stkn] += 1
+                scene_tkn = self.nusc.get('sample', stkn)['scene_token']
+                scene_tokens.add(scene_tkn)
+            scene_tokens = {scene_tkn : i for i, scene_tkn in enumerate(scene_tokens)}
+
+            res_idx = int(os.getenv("RESOLUTION_IDX", "-1"))
+            fpath = f'segment_eval_data_res{res_idx}.json'
             file_exists = os.path.isfile(fpath)
-            if file_exists:
-                with open(fpath, 'r') as file:
-                    segment_precision_info = json.load(file)
-            else:
-                segment_precision_info = {'fields': ('scene', 'time_segment', 'dist_th', 'class', 
-                        'resolution', 'seg_sample_stats'), 'tuples':[]}
-        else:
-            segment_precision_info = {}
+            #if file_exists:
+            #    with open(fpath, 'r') as file:
+            #        segment_eval_data = json.load(file)
+            #else:
+
+            class_names = list(self.cfg.class_names)
+            tuples = {cls_name: {str(dth):[] for dth in list(self.cfg.dist_ths)} for cls_name in class_names}
+            segment_eval_data.update({
+                # The sign of tp_scr_arr indicates if an element is true positive or not
+                'segment_tuple_keys':  ('scene_token_index', 'seg_start_time_ms', 'sample_tokens', 'sample_num_gt', 'tp_scr_arr'),
+                'class_names': class_names,
+                'distance_thresholds': list(self.cfg.dist_ths),
+                'scene_tokens': scene_tokens,
+                'resolution_idx': res_idx,
+                'segment_time_length_ms': int(os.getenv("SEG_TIMELEN_MS", 2000)),
+                'tuples': tuples})
 
         # -----------------------------------
         # Step 1: Accumulate metric data for all classes and distance thresholds.
@@ -347,12 +368,12 @@ class DetectionEval:
         for class_name in self.cfg.class_names:
             for dist_th in self.cfg.dist_ths:
                 md = accumulate(self.gt_boxes, self.pred_boxes, class_name, self.cfg.dist_fcn_callable,
-                        dist_th, False, self.nusc, sample_npos, segment_precision_info)
+                        dist_th, False, self.nusc, sample_npos, segment_eval_data)
                 metric_data_list.set(class_name, dist_th, md)
 
         if do_fine_grained_eval > 0:
             with open(fpath, 'w') as file:
-                json.dump(segment_precision_info, file, indent=2)
+                json.dump(segment_eval_data, file) # indentation occupies space!
         # -----------------------------------
         # Step 2: Calculate metrics from the data.
         # -----------------------------------
