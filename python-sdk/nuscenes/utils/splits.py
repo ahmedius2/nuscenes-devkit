@@ -151,15 +151,12 @@ mini_val = []
 #    ['scene-0103', 'scene-0916']
 
 # train is for calibration
-do_calib = int(os.getenv('CALIBRATION', '0'))
-if do_calib:
-    print('USING CALIBRATION DATASET')
-    #train = ['scene-0061', 'scene-0655', 'scene-0757', 'scene-1077', 'scene-1094', 'scene-1100']
+## STREAMING:
+set1 = [v for i,v in enumerate(val) if i % 2 == 1] # 75 scenes, for calib
+set2 = [v for i,v in enumerate(val) if i % 2 == 0] # 75 scenes, for validation
 
-    # for speed calib:
-    train = ['scene-0771', 'scene-0221', 'scene-1064', 'scene-0923', 'scene-1072', 'scene-0017']
-else:
-    train = []
+train = set1
+val = set2
 test  = []
 
 slow_speed_scenes = \
@@ -176,26 +173,6 @@ for scene in all_speed_scenes:
     if scene not in train:
         all_speed_scenes_.append(scene)
 all_speed_scenes = all_speed_scenes_
-
-if do_calib:
-    val = []
-else:
-    if 'DATASET_RANGE' in os.environ:
-        drange = os.getenv('DATASET_RANGE').split('-')
-        drange = [int(r) for r in drange]
-        print('VAL dataset range:', drange)
-        val = all_speed_scenes[drange[0]:drange[1]]
-    else:
-        dataset_perc = 0.2 #1.0/30.0
-        # total val scenes: 150
-
-        #val_ = val
-        val_ = all_speed_scenes
-        val = val_[0:len(val_):len(val_)//int(len(val_)*dataset_perc)]
-
-        # ENVIRONMENT TEST
-        #val = high_speed_scenes[:15]
-        #val = slow_speed_scenes[:15]
 
 def create_splits_logs(split: str, nusc: 'NuScenes') -> List[str]:
     """
